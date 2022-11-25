@@ -6,13 +6,15 @@
  * Change Logs:
  * Date           Author       Notes
  * 2019-01-08     zylx         first version
+ * 2022-11-25     YeC          add 5 inch LCD screen driver
  */
 
+//#include <rtthread.h>
 #include <board.h>
-
 #ifdef BSP_USING_LCD
-#include <lcd_port.h>
-#include <string.h>
+#include <drv_lcd.h>
+
+
 
 //#define DRV_DEBUG
 #define LOG_TAG             "drv.lcd"
@@ -20,36 +22,60 @@
 static LTDC_HandleTypeDef  Ltdc_Handler;
 static DMA2D_HandleTypeDef Dma2d_Handler;
 static uint32_t            ActiveLayer = 0;
-
+struct drv_lcd_device _lcd;
 #define LCD_DEVICE(dev)     (struct drv_lcd_device*)(dev)
 
 static LTDC_HandleTypeDef LtdcHandle = {0};
 
-struct drv_lcd_device
-{
-    struct rt_device parent;
+// 定义LCD屏幕相关硬件参数
+LCD_TypeDef cur_lcd = INCH_5;
 
-    struct rt_device_graphic_info lcd_info;
+const drv_lcd_dev lcd_param[LCD_TYPE_NUM]={
+    {
+        .lcd_hbp = 46,
+        .lcd_vbp = 23,
 
-    struct rt_semaphore lcd_lock;
+        .lcd_hsw = 1,
+        .lcd_vsw = 3,
 
-    /* 0:front_buf is being used 1: back_buf is being used*/
-    rt_uint8_t cur_buf;
-    rt_uint8_t *front_buf;
-    rt_uint8_t *back_buf;
+        .lcd_hfp = 40,
+        .lcd_vfp = 13,
+
+        .lcd_info.width = ((uint16_t)800),
+        .lcd_info.height = ((uint16_t)480),
+        .lcd_info.bits_per_pixel = 16,
+        .lcd_info.smem_len = (((uint16_t)800) * ((uint16_t)480) / 8),
+        .lcd_info.pixel_format = RTGRAPHIC_PIXEL_FORMAT_RGB565,
+
+        .clock_2byte = 33,
+        .clock_4byte = 21,
+
+    },
+    {
+        .lcd_hbp = 8,
+        .lcd_vbp = 2,
+
+        .lcd_hsw = 41,
+        .lcd_vsw = 10,
+
+        .lcd_hfp = 4,
+        .lcd_vfp = 4,
+
+        .lcd_info.width = ((uint16_t)480),
+        .lcd_info.height = ((uint16_t)272),
+        .lcd_info.bits_per_pixel = 16,
+        .lcd_info.smem_len = (((uint16_t)480) * ((uint16_t)272) / 8),
+        .lcd_info.pixel_format = RTGRAPHIC_PIXEL_FORMAT_RGB565,
+
+        .clock_2byte = 15,
+        .clock_4byte = 15,
+    }
 };
-
-struct drv_lcd_device _lcd;
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/// //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void LCD_GPIO_Config(void)
 {
     GPIO_InitTypeDef GPIO_InitStruct;
 
-  /* Ê¹ÄÜLCDÊ¹ÓÃµ½µÄÒý½ÅÊ±ÖÓ */
-                          //ºìÉ«Êý¾ÝÏß
   LTDC_R0_GPIO_CLK_ENABLE();LTDC_R1_GPIO_CLK_ENABLE();LTDC_R2_GPIO_CLK_ENABLE();\
   LTDC_R3_GPIO_CLK_ENABLE();LTDC_R4_GPIO_CLK_ENABLE();LTDC_R5_GPIO_CLK_ENABLE();\
   LTDC_R6_GPIO_CLK_ENABLE();LTDC_R7_GPIO_CLK_ENABLE();LTDC_G0_GPIO_CLK_ENABLE();\
@@ -60,9 +86,7 @@ static void LCD_GPIO_Config(void)
   LTDC_B5_GPIO_CLK_ENABLE();LTDC_B6_GPIO_CLK_ENABLE();LTDC_B7_GPIO_CLK_ENABLE();\
   LTDC_CLK_GPIO_CLK_ENABLE();LTDC_HSYNC_GPIO_CLK_ENABLE();LTDC_VSYNC_GPIO_CLK_ENABLE();\
   LTDC_DE_GPIO_CLK_ENABLE();LTDC_DISP_GPIO_CLK_ENABLE();LTDC_BL_GPIO_CLK_ENABLE();
-/* GPIOÅäÖÃ */
 
- /* ºìÉ«Êý¾ÝÏß */
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   GPIO_InitStruct.Mode  = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull  = GPIO_PULLUP;
@@ -190,7 +214,6 @@ static void LCD_GPIO_Config(void)
 
   HAL_GPIO_Init(LTDC_DISP_GPIO_PORT, &GPIO_InitStruct);
 
-
   GPIO_InitStruct.Pin = LTDC_BL_GPIO_PIN;
   HAL_GPIO_Init(LTDC_BL_GPIO_PORT, &GPIO_InitStruct);
 
@@ -199,32 +222,28 @@ static void LCD_GPIO_Config(void)
 void LCD_Init(void)
 {
     RCC_PeriphCLKInitTypeDef  periph_clk_init_struct;
-    /* Ê¹ÄÜLTDCÊ±ÖÓ */
     __HAL_RCC_LTDC_CLK_ENABLE();
-    /* Ê¹ÄÜDMA2DÊ±ÖÓ */
     __HAL_RCC_DMA2D_CLK_ENABLE();
-    /* ³õÊ¼»¯LCDÒý½Å */
     LCD_GPIO_Config();
-    /* ³õÊ¼»¯SDRAM ÓÃ×÷LCD ÏÔ´æ*/
-    /* ÅäÖÃLTDC²ÎÊý */
+
     Ltdc_Handler.Instance = LTDC;
-    /* ÅäÖÃÐÐÍ¬²½ÐÅºÅ¿í¶È(HSW-1) */
+
     Ltdc_Handler.Init.HorizontalSync =LCD_HSYNC_WIDTH;
-    /* ÅäÖÃ´¹Ö±Í¬²½ÐÅºÅ¿í¶È(VSW-1) */
+
     Ltdc_Handler.Init.VerticalSync = LCD_VSYNC_HEIGHT;
-    /* ÅäÖÃ(HSW+HBP-1) */
+
     Ltdc_Handler.Init.AccumulatedHBP = LCD_HSYNC_WIDTH+LCD_HBP-1;
-    /* ÅäÖÃ(VSW+VBP-1) */
+
     Ltdc_Handler.Init.AccumulatedVBP = LCD_VSYNC_HEIGHT+LCD_VBP-1;
-    /* ÅäÖÃ(HSW+HBP+ÓÐÐ§ÏñËØ¿í¶È-1) */
+
     Ltdc_Handler.Init.AccumulatedActiveW = LCD_HSYNC_WIDTH+LCD_HBP+LCD_WIDTH-1;
-    /* ÅäÖÃ(VSW+VBP+ÓÐÐ§ÏñËØ¸ß¶È-1) */
+
     Ltdc_Handler.Init.AccumulatedActiveH = LCD_VSYNC_HEIGHT+LCD_VBP+LCD_HEIGHT-1;
-    /* ÅäÖÃ×Ü¿í¶È(HSW+HBP+ÓÐÐ§ÏñËØ¿í¶È+HFP-1) */
+
     Ltdc_Handler.Init.TotalWidth =LCD_HSYNC_WIDTH+LCD_HBP+LCD_WIDTH + LCD_HFP-1;
-    /* ÅäÖÃ×Ü¸ß¶È(VSW+VBP+ÓÐÐ§ÏñËØ¸ß¶È+VFP-1) */
+
     Ltdc_Handler.Init.TotalHeigh =LCD_VSYNC_HEIGHT+LCD_VBP+LCD_HEIGHT + LCD_VFP-1;
-    /* Òº¾§ÆÁÊ±ÖÓÅäÖÃ */
+
     /* PLLSAI_VCO Input = HSE_VALUE/PLL_M = 1 Mhz */
     /* PLLSAI_VCO Output = PLLSAI_VCO Input * PLLSAIN = 192 Mhz */
     /* PLLLCDCLK = PLLSAI_VCO Output/PLLSAIR = 192/5 = 38.4 Mhz */
@@ -234,26 +253,88 @@ void LCD_Init(void)
     periph_clk_init_struct.PLLSAI.PLLSAIR = 5;
     periph_clk_init_struct.PLLSAIDivR = RCC_PLLSAIDIVR_4;
     HAL_RCCEx_PeriphCLKConfig(&periph_clk_init_struct);
-    /* ³õÊ¼»¯LCDµÄÏñËØ¿í¶ÈºÍ¸ß¶È */
+
     Ltdc_Handler.LayerCfg->ImageWidth  = LCD_WIDTH;
     Ltdc_Handler.LayerCfg->ImageHeight = LCD_HEIGHT;
-    /* ÉèÖÃLCD±³¾°²ãµÄÑÕÉ«£¬Ä¬ÈÏºÚÉ« */
+
     Ltdc_Handler.Init.Backcolor.Red = 0;
     Ltdc_Handler.Init.Backcolor.Green = 0;
     Ltdc_Handler.Init.Backcolor.Blue = 0;
-    /* ¼«ÐÔÅäÖÃ */
-    /* ³õÊ¼»¯ÐÐÍ¬²½¼«ÐÔ£¬µÍµçÆ½ÓÐÐ§ */
+
     Ltdc_Handler.Init.HSPolarity = LTDC_HSPOLARITY_AL;
-    /* ³õÊ¼»¯³¡Í¬²½¼«ÐÔ£¬µÍµçÆ½ÓÐÐ§ */
+
     Ltdc_Handler.Init.VSPolarity = LTDC_VSPOLARITY_AL;
-    /* ³õÊ¼»¯Êý¾ÝÓÐÐ§¼«ÐÔ£¬µÍµçÆ½ÓÐÐ§ */
+
     Ltdc_Handler.Init.DEPolarity = LTDC_DEPOLARITY_AL;
-    /* ³õÊ¼»¯ÐÐÏñËØÊ±ÖÓ¼«ÐÔ£¬Í¬ÊäÈëÊ±ÖÓ */
+
     Ltdc_Handler.Init.PCPolarity = LTDC_PCPOLARITY_IPC;
     HAL_LTDC_Init(&Ltdc_Handler);
-    /* ³õÊ¼»¯×ÖÌå */
+
     //LCD_SetFont(&LCD_DEFAULT_FONT);
 }
+
+
+static rt_err_t drv_lcd_init(struct rt_device *device)
+{
+    //rt_err_t ret = RT_EOK;
+    struct drv_lcd_device *lcd = LCD_DEVICE(device);
+    /* nothing, right now */
+    if(!lcd)
+    {
+        return RT_ERROR;
+    }
+    LCD_Init();
+    LCD_DisplayOn();
+
+    LCD_LayerInit(0, (uint32_t)0xD0000000,LTDC_PIXEL_FORMAT_ARGB8888);
+    /* LCD µÚ¶þ²ã³õÊ¼»¯ */
+    LCD_LayerInit(1, (uint32_t)0xD0000000+(LCD_GetXSize()*LCD_GetYSize()*4),LTDC_PIXEL_FORMAT_ARGB8888);
+    /* Ê¹ÄÜLCD£¬°üÀ¨¿ª±³¹â */
+    LCD_DisplayOn();
+
+    LCD_SelectLayer(0);
+
+    /* µÚÒ»²ãÇåÆÁ£¬ÏÔÊ¾È«ºÚ */
+    //LCD_Clear((uint32_t)0xFF000000);
+    LCD_Clear((uint32_t)0xFFFFA500);
+    /* Ñ¡ÔñLCDµÚ¶þ²ã */
+    LCD_SelectLayer(1);
+    LCD_Clear((uint32_t)0xFFFFA500);
+    /* µÚ¶þ²ãÇåÆÁ£¬ÏÔÊ¾È«ºÚ */
+    //LCD_Clear(0xFF000000);
+
+    /* ÅäÖÃµÚÒ»ºÍµÚ¶þ²ãµÄÍ¸Ã÷¶È,×îÐ¡ÖµÎª0£¬×î´óÖµÎª255*/
+    LCD_SetTransparency(0, 255);
+    LCD_SetTransparency(1, 0);
+
+    LCD_Clear((uint32_t)0xFFFFA500);
+
+    return RT_EOK;
+}
+
+
+
+
+#endif /* BSP_USING_LCD */
+
+
+
+
+
+#include <lcd_port.h>
+#include <string.h>
+
+
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// //////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
 
 uint32_t LCD_GetXSize(void)
 {
@@ -428,13 +509,7 @@ void LCD_Clear(uint32_t Color)
 
 
 
-static rt_err_t drv_lcd_init(struct rt_device *device)
-{
-    struct drv_lcd_device *lcd = LCD_DEVICE(device);
-    /* nothing, right now */
-    lcd = lcd;
-    return RT_EOK;
-}
+
 
 static rt_err_t drv_lcd_control(struct rt_device *device, int cmd, void *args)
 {
@@ -836,4 +911,4 @@ int lcd_test()
 MSH_CMD_EXPORT(lcd_test, lcd_test);
 #endif /* FINSH_USING_MSH */
 #endif /* DRV_DEBUG */
-#endif /* BSP_USING_LCD */
+
